@@ -1,0 +1,5 @@
+node_modules/
+com.keiya.claude-status.sdPlugin/bin/
+com.keiya.claude-status.sdPlugin/logs/
+*.streamDeckPlugin
+.DS_Store

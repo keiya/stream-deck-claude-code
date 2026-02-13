@@ -1,0 +1,61 @@
+{
+  "Name": "Claude Status",
+  "Version": "1.0.0.0",
+  "Author": "keiya",
+  "Actions": [
+    {
+      "Name": "Claude Session",
+      "UUID": "com.keiya.claude-status.session",
+      "Icon": "imgs/actions/session/icon",
+      "Tooltip": "Shows Claude Code session status. Press to switch iTerm tab.",
+      "PropertyInspectorPath": "ui/session.html",
+      "Controllers": ["Keypad"],
+      "States": [
+        {
+          "Image": "imgs/actions/session/key",
+          "TitleAlignment": "middle"
+        }
+      ]
+    },
+    {
+      "Name": "Claude Session Dial",
+      "UUID": "com.keiya.claude-status.session-dial",
+      "Icon": "imgs/actions/session-dial/icon",
+      "Tooltip": "LCD dial showing Claude Code session details. Rotate to cycle slots, press to switch iTerm tab.",
+      "PropertyInspectorPath": "ui/session-dial.html",
+      "Controllers": ["Encoder"],
+      "Encoder": {
+        "layout": "layouts/session-info.json",
+        "TriggerDescription": {
+          "Rotate": "Cycle slot",
+          "Push": "Switch iTerm tab"
+        }
+      },
+      "States": [
+        {
+          "Image": "imgs/actions/session-dial/icon"
+        }
+      ]
+    }
+  ],
+  "Category": "Claude Status",
+  "CategoryIcon": "imgs/plugin/category-icon",
+  "CodePath": "bin/plugin.js",
+  "Description": "Monitors Claude Code session status and displays it on Stream Deck buttons and LCD dials.",
+  "Icon": "imgs/plugin/marketplace",
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "6.5"
+  },
+  "OS": [
+    {
+      "Platform": "mac",
+      "MinimumVersion": "10.15"
+    }
+  ],
+  "Nodejs": {
+    "Version": "20",
+    "Debug": "enabled"
+  },
+  "UUID": "com.keiya.claude-status"
+}
