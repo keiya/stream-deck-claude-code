@@ -118,16 +118,20 @@ Notes:
 
 ```ts
 interface StateUpdate {
-  slot: number;       // 1..8
+  slot?: number;        // 1..8 (required if session_id not provided)
+  session_id?: string;  // iTerm2 session UUID (required if slot not provided)
   state: SessionState;
-  ts?: number;        // Date.now() — set by server if missing
-  project?: string;   // project/directory name
-  detail?: string;    // e.g. current tool name
-  prompt?: string;    // latest user prompt text
+  ts?: number;          // Date.now() — set by server if missing
+  project?: string;     // project/directory name
+  detail?: string;      // e.g. current tool name
+  prompt?: string;      // latest user prompt text
 }
 ```
 
-- `slot` must be validated as integer `1..8`. Reject anything else.
+- Either `slot` or `session_id` must be provided (at least one required).
+- `slot` takes priority over `session_id` if both are present.
+- `session_id` is resolved to a slot via the mapping sent by the iTerm2 Python daemon.
+- If `session_id` cannot be resolved (daemon not running or mapping not yet received), the update is silently dropped.
 
 ### 4.5 State colors
 
@@ -164,10 +168,11 @@ This is used to update `detail` or `project` without changing state.
 
 ### Endpoints (exhaustive — do not add endpoints without updating this list)
 
-| Method | Path     | Description                  |
-|--------|----------|------------------------------|
-| POST   | `/state` | Receive state update from hook |
-| GET    | `/state` | Debug: return all slot states  |
+| Method | Path        | Description                                    |
+|--------|-------------|------------------------------------------------|
+| POST   | `/state`    | Receive state update from hook (slot or session_id) |
+| GET    | `/state`    | Debug: return all slot states                  |
+| POST   | `/sessions` | Receive session→slot mapping from iTerm2 daemon |
 
 ---
 
@@ -184,14 +189,16 @@ This is used to update `detail` or `project` without changing state.
 ```
 src/
   plugin.ts              # Entry point: HTTP server + action registration + streamDeck.connect()
-  types.ts               # SessionState, StateUpdate, color constants
-  state.ts               # SessionStore (Map<slot, SessionInfo>) + listener pattern
+  types.ts               # SessionState, StateUpdate, SessionMapping, color constants
+  state.ts               # SessionStore (slot state + session mapping) + listener pattern
   svg.ts                 # SVG generation (slot number + project name + state color)
   iterm.ts               # osascript for iTerm2 tab switching
-  server.ts              # HTTP server (127.0.0.1:51820)
+  server.ts              # HTTP server (127.0.0.1:51820) — /state + /sessions
   actions/
     claude-session.ts        # Keypad action (buttons)
     claude-session-dial.ts   # Encoder action (LCD dials)
+iterm2/
+  claude-status.py       # iTerm2 Python API daemon (AutoLaunch script)
 com.keiya.claude-status.sdPlugin/
   manifest.json
   layouts/

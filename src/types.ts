@@ -16,13 +16,17 @@ export type SessionInfo = {
 };
 
 export type StateUpdate = {
-  slot: number;
+  slot?: number;        // 1..8 (required if session_id not provided)
+  session_id?: string;  // iTerm2 session UUID (required if slot not provided)
   state: SessionState;
   ts?: number;
   project?: string;
   detail?: string;
   prompt?: string;
 };
+
+// Mapping sent by iTerm2 Python daemon: session UUID → slot position
+export type SessionMapping = Record<string, number>;
 
 export type ActionSettings = {
   slot: number;
@@ -64,3 +68,6 @@ export const parseSlot = (value: unknown): number => {
 
 export const isSessionState = (x: unknown): x is SessionState =>
   typeof x === "string" && VALID_STATES.has(x);
+
+export const isValidSessionId = (x: unknown): x is string =>
+  typeof x === "string" && x.length > 0 && x.length <= 64;
