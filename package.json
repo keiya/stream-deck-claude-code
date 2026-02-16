@@ -1,6 +1,7 @@
 {
   "scripts": {
     "build": "rollup -c",
+    "test": "vitest run",
     "watch": "rollup -c -w --watch.onEnd=\"streamdeck restart com.keiya.claude-status\""
   },
   "type": "module",
@@ -13,7 +14,8 @@
     "@types/node": "^22.13.0",
     "rollup": "^4.32.1",
     "tslib": "^2.8.1",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^4.0.18"
   },
   "dependencies": {
     "@elgato/streamdeck": "^2.0.1"

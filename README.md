@@ -85,9 +85,19 @@ Add to `~/.zshrc` or `~/.bashrc`:
 
 ```bash
 # Auto-assign SD_SLOT based on iTerm2 tab index
-claude-sd() {
+claudesd() {
   local tab_index
-  tab_index=$(osascript -e 'tell application "iTerm2" to tell current window to get index of current tab' 2>/dev/null)
+  tab_index=$(osascript -e '
+    tell application "iTerm2"
+      tell current window
+        set tabList to tabs
+        set currentTab to current tab
+        repeat with i from 1 to count of tabList
+          if item i of tabList is currentTab then return i
+        end repeat
+      end tell
+    end tell
+  ' 2>/dev/null)
   export SD_SLOT="${tab_index:-1}"
   claude "$@"
 }

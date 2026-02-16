@@ -35,7 +35,7 @@ export const STATE_COLORS: Record<SessionState, string> = {
   compacting: "#9C27B0",
   done: "#4CAF50",
   error: "#F44336",
-  offline: "#9E9E9E",
+  offline: "#000000",
 };
 
 export const STATE_LABELS: Record<SessionState, string> = {

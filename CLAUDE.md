@@ -139,7 +139,7 @@ interface StateUpdate {
 | compacting  | Purple    | `#9C27B0` |
 | done        | Green     | `#4CAF50` |
 | error       | Red       | `#F44336` |
-| offline     | Gray      | `#9E9E9E` |
+| offline     | Black     | `#000000` |
 
 ### 4.3 Same-state updates
 
