@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseSlot, isSessionState } from "./types";
+import { parseSlot, isSessionState, isValidSessionId } from "./types";
 
 describe("parseSlot", () => {
   it("returns valid slot numbers as-is", () => {
@@ -43,5 +43,27 @@ describe("isSessionState", () => {
     expect(isSessionState(123)).toBe(false);
     expect(isSessionState(null)).toBe(false);
     expect(isSessionState(undefined)).toBe(false);
+  });
+});
+
+describe("isValidSessionId", () => {
+  it("returns true for valid session IDs", () => {
+    expect(isValidSessionId("78EC351B-637F-48E2-BB2A-0067873B9C5F")).toBe(true);
+    expect(isValidSessionId("abc")).toBe(true);
+    expect(isValidSessionId("a".repeat(64))).toBe(true);
+  });
+
+  it("returns false for empty string", () => {
+    expect(isValidSessionId("")).toBe(false);
+  });
+
+  it("returns false for strings over 64 chars", () => {
+    expect(isValidSessionId("a".repeat(65))).toBe(false);
+  });
+
+  it("returns false for non-string values", () => {
+    expect(isValidSessionId(123)).toBe(false);
+    expect(isValidSessionId(null)).toBe(false);
+    expect(isValidSessionId(undefined)).toBe(false);
   });
 });

@@ -148,4 +148,113 @@ describe("SessionStore", () => {
     store.update({ slot: 1, state: "idle", ts: 200 }); // blocked
     expect(listener).not.toHaveBeenCalled();
   });
+
+  // --- Session ID resolution ---
+
+  it("resolves session_id to slot after mapping is set", () => {
+    const store = new SessionStore();
+    store.updateMapping({ "abc-123": 1, "def-456": 2 });
+    expect(store.resolveSlot("abc-123")).toBe(1);
+    expect(store.resolveSlot("def-456")).toBe(2);
+  });
+
+  it("returns undefined for unknown session_id", () => {
+    const store = new SessionStore();
+    store.updateMapping({ "abc-123": 1 });
+    expect(store.resolveSlot("unknown")).toBeUndefined();
+  });
+
+  it("updates via session_id when mapping exists", () => {
+    const store = new SessionStore();
+    store.updateMapping({ "abc-123": 2 });
+    store.update({ session_id: "abc-123", state: "thinking", ts: 100 });
+    expect(store.get(2).state).toBe("thinking");
+  });
+
+  it("silently drops update when session_id has no mapping", () => {
+    const store = new SessionStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.update({ session_id: "unknown-id", state: "thinking", ts: 100 });
+    expect(listener).not.toHaveBeenCalled();
+    // All slots remain offline
+    for (let slot = 1; slot <= 8; slot++) {
+      expect(store.get(slot).state).toBe("offline");
+    }
+  });
+
+  it("prefers explicit slot over session_id", () => {
+    const store = new SessionStore();
+    store.updateMapping({ "abc-123": 2 });
+    store.update({ slot: 5, session_id: "abc-123", state: "idle", ts: 100 });
+    // slot 5 should be updated, not slot 2
+    expect(store.get(5).state).toBe("idle");
+    expect(store.get(2).state).toBe("offline");
+  });
+
+  // --- updateMapping: tab reorder ---
+
+  it("moves data when session changes slot (tab reorder)", () => {
+    const store = new SessionStore();
+    store.updateMapping({ "sess-a": 1, "sess-b": 2 });
+    store.update({ session_id: "sess-a", state: "thinking", project: "/projA", ts: 100 });
+    store.update({ session_id: "sess-b", state: "idle", project: "/projB", ts: 100 });
+
+    // Reorder: swap tabs
+    store.updateMapping({ "sess-a": 2, "sess-b": 1 });
+
+    expect(store.get(2).state).toBe("thinking");
+    expect(store.get(2).project).toBe("/projA");
+    expect(store.get(1).state).toBe("idle");
+    expect(store.get(1).project).toBe("/projB");
+  });
+
+  it("sets old slot offline when session moves and old slot is unoccupied", () => {
+    const store = new SessionStore();
+    store.updateMapping({ "sess-a": 1 });
+    store.update({ session_id: "sess-a", state: "thinking", ts: 100 });
+
+    // sess-a moves from slot 1 to slot 3
+    store.updateMapping({ "sess-a": 3 });
+
+    expect(store.get(3).state).toBe("thinking");
+    expect(store.get(1).state).toBe("offline");
+  });
+
+  // --- updateMapping: tab close ---
+
+  it("sets slot offline when session disappears (tab closed)", () => {
+    const store = new SessionStore();
+    store.updateMapping({ "sess-a": 1, "sess-b": 2 });
+    store.update({ session_id: "sess-a", state: "idle", ts: 100 });
+    store.update({ session_id: "sess-b", state: "thinking", ts: 100 });
+
+    // sess-b closed
+    store.updateMapping({ "sess-a": 1 });
+
+    expect(store.get(1).state).toBe("idle");
+    expect(store.get(2).state).toBe("offline");
+  });
+
+  it("notifies listeners on mapping-triggered changes", () => {
+    const store = new SessionStore();
+    store.updateMapping({ "sess-a": 1 });
+    store.update({ session_id: "sess-a", state: "thinking", ts: 100 });
+
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    // Close tab
+    store.updateMapping({});
+
+    expect(listener).toHaveBeenCalledWith(1, expect.objectContaining({ state: "offline" }));
+  });
+
+  it("ignores mapping entries with out-of-range slots", () => {
+    const store = new SessionStore();
+    store.updateMapping({ "sess-a": 0, "sess-b": 9, "sess-c": 3 });
+    expect(store.resolveSlot("sess-a")).toBeUndefined();
+    expect(store.resolveSlot("sess-b")).toBeUndefined();
+    expect(store.resolveSlot("sess-c")).toBe(3);
+  });
 });

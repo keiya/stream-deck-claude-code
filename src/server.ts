@@ -1,7 +1,7 @@
 import http from "node:http";
 import streamDeck from "@elgato/streamdeck";
 import type { SessionStore } from "./state";
-import { HTTP_HOST, HTTP_PORT, MAX_BODY_SIZE, MIN_SLOT, MAX_SLOT, isSessionState } from "./types";
+import { HTTP_HOST, HTTP_PORT, MAX_BODY_SIZE, MIN_SLOT, MAX_SLOT, isSessionState, isValidSessionId } from "./types";
 
 const logger = streamDeck.logger.createScope("HTTP");
 
@@ -37,19 +37,42 @@ const readBody = (req: http.IncomingMessage): Promise<string | null> =>
     req.on("error", () => resolve(null));
   });
 
+type ValidatedUpdate = {
+  slot?: number;
+  session_id?: string;
+  state: string;
+  ts?: number;
+  project?: string;
+  detail?: string;
+  prompt?: string;
+};
+
 const validateUpdate = (
   body: unknown,
-): { ok: true; data: { slot: number; state: string; ts?: number; project?: string; detail?: string; prompt?: string } } | { ok: false; error: string } => {
+): { ok: true; data: ValidatedUpdate } | { ok: false; error: string } => {
   if (typeof body !== "object" || body === null) {
     return { ok: false, error: "body must be a JSON object" };
   }
 
   const obj = body as Record<string, unknown>;
 
-  // slot
+  // slot (optional if session_id is provided)
   const slot = obj["slot"];
-  if (typeof slot !== "number" || !Number.isInteger(slot) || slot < MIN_SLOT || slot > MAX_SLOT) {
+  const hasSlot = slot !== undefined;
+  if (hasSlot && (typeof slot !== "number" || !Number.isInteger(slot) || slot < MIN_SLOT || slot > MAX_SLOT)) {
     return { ok: false, error: `slot must be integer ${MIN_SLOT}..${MAX_SLOT}` };
+  }
+
+  // session_id (optional if slot is provided)
+  const sessionId = obj["session_id"];
+  const hasSessionId = sessionId !== undefined;
+  if (hasSessionId && !isValidSessionId(sessionId)) {
+    return { ok: false, error: "session_id must be a non-empty string (max 64 chars)" };
+  }
+
+  // At least one of slot or session_id is required
+  if (!hasSlot && !hasSessionId) {
+    return { ok: false, error: "either slot or session_id is required" };
   }
 
   // state
@@ -85,7 +108,8 @@ const validateUpdate = (
   return {
     ok: true,
     data: {
-      slot: slot as number,
+      ...(hasSlot && { slot: slot as number }),
+      ...(hasSessionId && { session_id: sessionId as string }),
       state: state as string,
       ...(ts !== undefined && { ts: ts as number }),
       ...(project !== undefined && { project: project as string }),
@@ -95,61 +119,112 @@ const validateUpdate = (
   };
 };
 
+const validateMapping = (
+  body: unknown,
+): { ok: true; data: Record<string, number> } | { ok: false; error: string } => {
+  if (typeof body !== "object" || body === null) {
+    return { ok: false, error: "body must be a JSON object" };
+  }
+
+  const obj = body as Record<string, unknown>;
+  const mapping: Record<string, number> = {};
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (!isValidSessionId(key)) {
+      return { ok: false, error: `invalid session_id key: ${key}` };
+    }
+    if (typeof value !== "number" || !Number.isInteger(value) || value < MIN_SLOT || value > MAX_SLOT) {
+      return { ok: false, error: `slot for ${key} must be integer ${MIN_SLOT}..${MAX_SLOT}` };
+    }
+    mapping[key] = value;
+  }
+
+  return { ok: true, data: mapping };
+};
+
+/** Parse and validate a JSON POST body. Returns parsed object or sends error response. */
+const parseJsonBody = async (
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<unknown | null> => {
+  const contentType = req.headers["content-type"] ?? "";
+  if (!contentType.startsWith("application/json")) {
+    jsonResponse(res, 400, { ok: false, error: "Content-Type must be application/json" });
+    return null;
+  }
+
+  const raw = await readBody(req);
+  if (raw === null) {
+    jsonResponse(res, 400, { ok: false, error: "body too large or unreadable" });
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    jsonResponse(res, 400, { ok: false, error: "invalid JSON" });
+    return null;
+  }
+};
+
 export const createServer = (store: SessionStore): http.Server => {
   const server = http.createServer(async (req, res) => {
     const { method, url } = req;
 
-    if (url !== "/state") {
-      jsonResponse(res, 404, { ok: false, error: "not found" });
-      return;
+    // --- /state ---
+    if (url === "/state") {
+      // GET /state — debug endpoint
+      if (method === "GET") {
+        jsonResponse(res, 200, { ok: true, data: store.getAll() });
+        return;
+      }
+
+      // POST /state — state update from hook
+      if (method === "POST") {
+        const parsed = await parseJsonBody(req, res);
+        if (parsed === null) return;
+
+        const result = validateUpdate(parsed);
+        if (!result.ok) {
+          jsonResponse(res, 400, { ok: false, error: result.error });
+          return;
+        }
+
+        store.update({
+          slot: result.data.slot,
+          session_id: result.data.session_id,
+          state: result.data.state as import("./types").SessionState,
+          ts: result.data.ts,
+          project: result.data.project,
+          detail: result.data.detail,
+          prompt: result.data.prompt,
+        });
+
+        const id = result.data.slot !== undefined ? `Slot ${result.data.slot}` : `Session ${result.data.session_id}`;
+        logger.info(`${id}: ${result.data.state}`);
+        jsonResponse(res, 200, { ok: true });
+        return;
+      }
     }
 
-    // GET /state — debug endpoint
-    if (method === "GET") {
-      jsonResponse(res, 200, { ok: true, data: store.getAll() });
-      return;
-    }
+    // --- /sessions ---
+    if (url === "/sessions") {
+      // POST /sessions — mapping update from iTerm2 Python daemon
+      if (method === "POST") {
+        const parsed = await parseJsonBody(req, res);
+        if (parsed === null) return;
 
-    // POST /state — state update
-    if (method === "POST") {
-      const contentType = req.headers["content-type"] ?? "";
-      if (!contentType.startsWith("application/json")) {
-        jsonResponse(res, 400, { ok: false, error: "Content-Type must be application/json" });
+        const result = validateMapping(parsed);
+        if (!result.ok) {
+          jsonResponse(res, 400, { ok: false, error: result.error });
+          return;
+        }
+
+        store.updateMapping(result.data);
+        logger.info(`Session mapping updated: ${Object.keys(result.data).length} sessions`);
+        jsonResponse(res, 200, { ok: true });
         return;
       }
-
-      const raw = await readBody(req);
-      if (raw === null) {
-        jsonResponse(res, 400, { ok: false, error: "body too large or unreadable" });
-        return;
-      }
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        jsonResponse(res, 400, { ok: false, error: "invalid JSON" });
-        return;
-      }
-
-      const result = validateUpdate(parsed);
-      if (!result.ok) {
-        jsonResponse(res, 400, { ok: false, error: result.error });
-        return;
-      }
-
-      store.update({
-        slot: result.data.slot,
-        state: result.data.state as import("./types").SessionState,
-        ts: result.data.ts,
-        project: result.data.project,
-        detail: result.data.detail,
-        prompt: result.data.prompt,
-      });
-
-      logger.info(`Slot ${result.data.slot}: ${result.data.state}`);
-      jsonResponse(res, 200, { ok: true });
-      return;
     }
 
     jsonResponse(res, 404, { ok: false, error: "not found" });

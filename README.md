@@ -16,14 +16,15 @@ Stream Deck Plus plugin that monitors Claude Code session status in real time.
 | Compacting | Purple | Context compaction in progress |
 | Done | Green | Session stopped |
 | Error | Red | (reserved) |
-| Offline | Gray | No active session |
+| Offline | Black | No active session |
 
 ## Requirements
 
 - macOS 10.15+
 - Node.js 20+ (bundled by Stream Deck)
 - Stream Deck software 6.5+
-- iTerm2 (for tab switching)
+- iTerm2 (for tab switching + Python API daemon)
+- iTerm2 Python Runtime (for automatic session tracking)
 
 ## Build
 
@@ -57,50 +58,77 @@ After either method, restart the Stream Deck app (or it will detect the new plug
 
 ## Setup
 
-### 1. Configure Stream Deck actions
+### Quick setup
+
+```bash
+npm install
+npm run build
+npm run setup
+```
+
+This installs everything:
+- Hook script → `~/.claude/hooks/sd-notify.sh`
+- Hook entries → `~/.claude/settings.json` (7 events, merged non-destructively)
+- iTerm2 daemon → `~/Library/Application Support/iTerm2/Scripts/AutoLaunch/claude-status.py`
+
+Then:
+1. Enable iTerm2 Python API: **iTerm2 > Settings > General > Magic > Enable Python API**
+2. Restart iTerm2
+3. Install the Stream Deck plugin: `streamdeck link com.keiya.claude-status.sdPlugin`
+4. Add **Claude Session** actions in the Stream Deck app
+5. Launch `claude` in any iTerm2 tab — it just works
+
+### How it works
+
+The iTerm2 daemon tracks tab positions and sends `session_id → slot` mappings to the plugin. The Claude Code hook sends `ITERM_SESSION_ID` (set automatically by iTerm2) with each state update. The plugin resolves the session to the correct slot. Tab reorder and close are handled automatically.
+
+### Manual setup (without installer)
+
+<details>
+<summary>Click to expand</summary>
+
+#### Stream Deck actions
 
 1. Open Stream Deck app
 2. Drag **Claude Session** onto a button and set the **Slot** (1-8) in the Property Inspector
 3. Drag **Claude Session Dial** onto an encoder for LCD display
 
-### 2. Hook integration
-
-The build step already added hooks to `~/.claude/settings.json` and created `~/.claude/hooks/sd-notify.sh`.
-
-To use, launch Claude Code with the `SD_SLOT` environment variable:
+#### iTerm2 Python daemon
 
 ```bash
-# Slot 1
-SD_SLOT=1 claude
-
-# Slot 2 in another tab
-SD_SLOT=2 claude
+cp iterm2/claude-status.py \
+  ~/Library/Application\ Support/iTerm2/Scripts/AutoLaunch/claude-status.py
 ```
 
-Each slot corresponds to a button/dial on Stream Deck. Up to 8 concurrent sessions are supported.
+Enable Python API in **iTerm2 > Settings > General > Magic > Enable Python API**, then restart iTerm2.
 
-### Shell alias (optional)
+#### Hook configuration
 
-Add to `~/.zshrc` or `~/.bashrc`:
+Add to `~/.claude/settings.json` (uses the new matcher format):
+
+```json
+{
+  "hooks": {
+    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/sd-notify.sh", "async": true }] }],
+    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/sd-notify.sh", "async": true }] }],
+    "PreToolUse":        [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/sd-notify.sh", "async": true }] }],
+    "Notification":      [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/sd-notify.sh", "async": true }] }],
+    "PreCompact":        [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/sd-notify.sh", "async": true }] }],
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/sd-notify.sh", "async": true }] }],
+    "SessionEnd":        [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/sd-notify.sh", "async": true }] }]
+  }
+}
+```
+
+</details>
+
+### Fallback: manual SD_SLOT (without iTerm2 daemon)
+
+If you don't use iTerm2 or prefer manual control, set `SD_SLOT` before launching:
 
 ```bash
-# Auto-assign SD_SLOT based on iTerm2 tab index
-claudesd() {
-  local tab_index
-  tab_index=$(osascript -e '
-    tell application "iTerm2"
-      tell current window
-        set tabList to tabs
-        set currentTab to current tab
-        repeat with i from 1 to count of tabList
-          if item i of tabList is currentTab then return i
-        end repeat
-      end tell
-    end tell
-  ' 2>/dev/null)
-  export SD_SLOT="${tab_index:-1}"
-  claude "$@"
-}
+SD_SLOT=1 claude
+SD_SLOT=2 claude  # in another tab
 ```
 
 ## Architecture
@@ -108,19 +136,43 @@ claudesd() {
 ```
 src/
   plugin.ts              # Entry: store + actions + HTTP server + connect
-  types.ts               # SessionState, StateUpdate, color/label constants
-  state.ts               # SessionStore (Map<slot, SessionInfo>)
+  types.ts               # SessionState, StateUpdate, SessionMapping, constants
+  state.ts               # SessionStore (slot state + session mapping)
   svg.ts                 # SVG generation for buttons and dial backgrounds
-  iterm.ts               # osascript tab switching (slot 1-based -> tab 0-based)
+  iterm.ts               # osascript tab switching (slot 1-based → tab 0-based)
   server.ts              # HTTP server on 127.0.0.1:51820
   actions/
     claude-session.ts        # Keypad action (buttons)
     claude-session-dial.ts   # Encoder action (LCD dials)
+hooks/
+  sd-notify.sh           # Claude Code hook script (installed to ~/.claude/hooks/)
+iterm2/
+  claude-status.py       # iTerm2 Python API daemon (AutoLaunch script)
+scripts/
+  install.sh             # One-shot installer (npm run setup)
+```
+
+### How it works
+
+```
+iTerm2 Python daemon          Stream Deck Plugin            Claude Code hook
+─────────────────────          ──────────────────            ────────────────
+Tab change detected   ──POST /sessions──>  Stores session_id→slot
+                                           mapping
+                                                  <──POST /state──  Sends session_id + state
+                                           Resolves to slot
+                                           Updates button/LCD
 ```
 
 ### HTTP API
 
 The plugin runs a local HTTP server on `127.0.0.1:51820`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/state` | Return all slot states (debug) |
+| POST | `/state` | State update from hook (slot or session_id) |
+| POST | `/sessions` | Session→slot mapping from iTerm2 daemon |
 
 ```bash
 # Get all slot states
@@ -130,31 +182,34 @@ curl http://127.0.0.1:51820/state
 #### Test curl commands
 
 ```bash
-# Idle (orange)
+# Using slot (legacy)
 curl -X POST http://127.0.0.1:51820/state -H 'Content-Type: application/json' \
   -d '{"slot":1,"state":"idle","project":"/Users/you/repos/my-app"}'
 
-# Thinking (blue)
+# Using session_id (with daemon)
+curl -X POST http://127.0.0.1:51820/state -H 'Content-Type: application/json' \
+  -d '{"session_id":"78EC351B-637F-48E2-BB2A-0067873B9C5F","state":"thinking","prompt":"Fix the bug"}'
+
+# Send session mapping (simulates daemon)
+curl -X POST http://127.0.0.1:51820/sessions -H 'Content-Type: application/json' \
+  -d '{"78EC351B-637F-48E2-BB2A-0067873B9C5F":1,"AABBCCDD-1234-5678-9ABC-DEF012345678":2}'
+
+# State examples by slot
 curl -X POST http://127.0.0.1:51820/state -H 'Content-Type: application/json' \
   -d '{"slot":1,"state":"thinking","project":"/Users/you/repos/my-app","prompt":"Fix the LCD dial display"}'
 
-# Permission (amber)
 curl -X POST http://127.0.0.1:51820/state -H 'Content-Type: application/json' \
   -d '{"slot":1,"state":"permission","project":"/Users/you/repos/my-app","detail":"execute_bash"}'
 
-# Compacting (purple)
 curl -X POST http://127.0.0.1:51820/state -H 'Content-Type: application/json' \
   -d '{"slot":1,"state":"compacting","project":"/Users/you/repos/my-app"}'
 
-# Done (green)
 curl -X POST http://127.0.0.1:51820/state -H 'Content-Type: application/json' \
   -d '{"slot":1,"state":"done","project":"/Users/you/repos/my-app"}'
 
-# Error (red)
 curl -X POST http://127.0.0.1:51820/state -H 'Content-Type: application/json' \
   -d '{"slot":1,"state":"error","project":"/Users/you/repos/my-app"}'
 
-# Offline (gray)
 curl -X POST http://127.0.0.1:51820/state -H 'Content-Type: application/json' \
   -d '{"slot":1,"state":"offline"}'
 ```
