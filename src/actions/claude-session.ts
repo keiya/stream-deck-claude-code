@@ -3,6 +3,7 @@ import streamDeck, {
   KeyDownEvent,
   SingletonAction,
   WillAppearEvent,
+  WillDisappearEvent,
   DidReceiveSettingsEvent,
 } from "@elgato/streamdeck";
 import type { ActionSettings, SessionInfo } from "../types";
@@ -160,6 +161,10 @@ export class ClaudeSession extends SingletonAction<ActionSettings> {
       const info = storeRef.get(slot);
       await renderButton(ev.action, slot, info);
     }
+  }
+
+  override onWillDisappear(ev: WillDisappearEvent<ActionSettings>): void {
+    contextSlot.delete(ev.action.id);
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<ActionSettings>): Promise<void> {

@@ -139,12 +139,13 @@ The plugin runs a local HTTP server on `127.0.0.1:51820`.
 
 ### POST /state
 
-Update a slot's state. Either `slot` or `session_id` is required (at least one). `slot` takes priority if both are present.
+Update a slot's state. At least one of `slot`, `session_id`, or `fallback_slot` is required. Resolution order: `slot` (explicit) → `session_id` (daemon mapping) → `fallback_slot`.
 
 ```jsonc
 {
-  "slot": 1,                    // integer 1-8 (optional if session_id provided)
-  "session_id": "UUID-HERE",    // iTerm2 session UUID (optional if slot provided)
+  "slot": 1,                    // integer 1-8 — explicit slot (highest priority)
+  "session_id": "UUID-HERE",    // iTerm2 session UUID → resolved via daemon mapping
+  "fallback_slot": 1,           // integer 1-8 — used when session_id can't be resolved
   "state": "thinking",          // required: idle|thinking|permission|compacting|done|error|offline
   "ts": 1700000000000,          // optional: timestamp (Date.now()), server sets if missing
   "project": "/path/to/repo",   // optional: project directory
@@ -153,7 +154,7 @@ Update a slot's state. Either `slot` or `session_id` is required (at least one).
 }
 ```
 
-If `session_id` is provided without `slot`, the plugin resolves it via the daemon mapping. If the session is unknown (daemon not running or mapping not yet received), the update is silently dropped.
+If `session_id` is provided without `slot`, the plugin resolves it via the daemon mapping. If the session is unknown, the update is buffered (up to 30 s) and replayed when a matching mapping arrives. A `fallback_slot` field (derived from the tab index in `ITERM_SESSION_ID`) provides immediate slot resolution even before the daemon mapping is available.
 
 ### POST /sessions
 

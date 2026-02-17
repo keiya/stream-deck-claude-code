@@ -171,16 +171,59 @@ describe("SessionStore", () => {
     expect(store.get(2).state).toBe("thinking");
   });
 
-  it("silently drops update when session_id has no mapping", () => {
+  it("buffers update when session_id has no mapping, replays on mapping arrival", () => {
     const store = new SessionStore();
     const listener = vi.fn();
     store.subscribe(listener);
     store.update({ session_id: "unknown-id", state: "thinking", ts: 100 });
+    // Not yet delivered — all slots remain offline
     expect(listener).not.toHaveBeenCalled();
-    // All slots remain offline
     for (let slot = 1; slot <= 8; slot++) {
       expect(store.get(slot).state).toBe("offline");
     }
+    // Mapping arrives — buffered update replays
+    store.updateMapping({ "unknown-id": 3 });
+    expect(store.get(3).state).toBe("thinking");
+  });
+
+  it("uses fallback_slot when session_id has no mapping", () => {
+    const store = new SessionStore();
+    store.update({ session_id: "unmapped", state: "idle", fallback_slot: 4, ts: 100 });
+    expect(store.get(4).state).toBe("idle");
+  });
+
+  it("prefers session_id mapping over fallback_slot", () => {
+    const store = new SessionStore();
+    store.updateMapping({ "mapped-id": 2 });
+    store.update({ session_id: "mapped-id", state: "thinking", fallback_slot: 5, ts: 100 });
+    // session_id resolves to slot 2, fallback_slot 5 is ignored
+    expect(store.get(2).state).toBe("thinking");
+    expect(store.get(5).state).toBe("offline");
+  });
+
+  it("does not overwrite occupied slot via fallback_slot", () => {
+    const store = new SessionStore();
+    // sess-a occupies slot 2 via mapping
+    store.updateMapping({ "sess-a": 2 });
+    store.update({ session_id: "sess-a", state: "thinking", project: "/projA", ts: 100 });
+
+    // sess-b tries fallback_slot 2 — should NOT overwrite sess-a
+    store.update({ session_id: "sess-b", state: "idle", fallback_slot: 2, ts: 200 });
+    expect(store.get(2).state).toBe("thinking");
+    expect(store.get(2).project).toBe("/projA");
+  });
+
+  it("moves data from fallback_slot to real slot when mapping arrives", () => {
+    const store = new SessionStore();
+    // Update lands on fallback_slot 2 (no mapping yet)
+    store.update({ session_id: "sess-x", state: "thinking", project: "/proj", fallback_slot: 2, ts: 100 });
+    expect(store.get(2).state).toBe("thinking");
+
+    // Daemon mapping arrives: sess-x actually belongs in slot 1
+    store.updateMapping({ "sess-x": 1 });
+    expect(store.get(1).state).toBe("thinking");
+    expect(store.get(1).project).toBe("/proj");
+    expect(store.get(2).state).toBe("offline");
   });
 
   it("prefers explicit slot over session_id", () => {

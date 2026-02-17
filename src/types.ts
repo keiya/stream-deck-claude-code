@@ -16,8 +16,9 @@ export type SessionInfo = {
 };
 
 export type StateUpdate = {
-  slot?: number;        // 1..8 (required if session_id not provided)
-  session_id?: string;  // iTerm2 session UUID (required if slot not provided)
+  slot?: number;           // 1..8 — explicit slot (highest priority)
+  session_id?: string;     // iTerm2 session UUID → resolved via daemon mapping
+  fallback_slot?: number;  // 1..8 — used only when session_id can't be resolved
   state: SessionState;
   ts?: number;
   project?: string;

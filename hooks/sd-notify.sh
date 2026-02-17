@@ -6,6 +6,9 @@
 #   1. ITERM_SESSION_ID → sends session_id (UUID part) — resolved by plugin via daemon mapping
 #   2. SD_SLOT → sends slot directly (legacy fallback, no daemon needed)
 #   3. Neither set → exit silently
+#
+# NOTE: Projects with "disableAllHooks": true in .claude/settings.local.json
+# will NOT run this hook. Remove that setting to enable Stream Deck updates.
 
 set -euo pipefail
 
@@ -19,10 +22,16 @@ CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)
 # Determine binding: session_id or slot
 SESSION_UUID=""
 SLOT_NUM=""
+FALLBACK_SLOT=""
 
 if [[ -n "${ITERM_SESSION_ID:-}" ]]; then
   # Extract UUID portion after the colon (e.g. "w0t0p0:UUID" → "UUID")
   SESSION_UUID="${ITERM_SESSION_ID##*:}"
+  # Extract tab index from prefix as fallback slot (e.g. "w0t2p0:UUID" → 3)
+  # This is the tab index at session creation — correct unless tabs are reordered
+  if [[ "$ITERM_SESSION_ID" =~ t([0-9]+) ]]; then
+    FALLBACK_SLOT=$(( ${BASH_REMATCH[1]} + 1 ))
+  fi
 elif [[ -n "${SD_SLOT:-}" ]]; then
   SLOT_NUM="${SD_SLOT}"
 else
@@ -36,6 +45,10 @@ build_payload() {
   local payload
   if [[ -n "$SESSION_UUID" ]]; then
     payload=$(jq -n --arg sid "$SESSION_UUID" --arg state "$state" '{session_id: $sid, state: $state}')
+    # Add fallback_slot derived from tab index in ITERM_SESSION_ID
+    if [[ -n "$FALLBACK_SLOT" ]] && [[ "$FALLBACK_SLOT" -ge 1 ]] && [[ "$FALLBACK_SLOT" -le 8 ]]; then
+      payload=$(echo "$payload" | jq --argjson fs "$FALLBACK_SLOT" '. + {fallback_slot: $fs}')
+    fi
   else
     payload=$(jq -n --argjson slot "${SLOT_NUM}" --arg state "$state" '{slot: $slot, state: $state}')
   fi

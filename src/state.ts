@@ -17,6 +17,11 @@ const restoreState = (state: SessionState): SessionState => {
   return state;
 };
 
+// Max buffered updates for unresolved session_ids (prevents memory leaks)
+const PENDING_MAX = 16;
+// Buffered updates expire after 30 seconds
+const PENDING_TTL_MS = 30_000;
+
 export class SessionStore {
   private readonly map: Map<number, SessionInfo>;
   private readonly listeners: Set<SlotListener>;
@@ -24,6 +29,8 @@ export class SessionStore {
   private readonly sessionSlotMap = new Map<string, number>();
   // slot number → session_id (reverse lookup)
   private readonly slotSessionMap = new Map<number, string>();
+  // Buffered state updates for session_ids not yet in the mapping (race condition fix)
+  private readonly pendingUpdates = new Map<string, StateUpdate>();
 
   constructor() {
     this.map = new Map();
@@ -147,16 +154,36 @@ export class SessionStore {
         this.notify(slot, this.get(slot));
       }
     }
+
+    // Replay any buffered updates that can now be resolved
+    this.replayPending();
   }
 
   update(update: StateUpdate): void {
-    // Resolve slot: explicit slot takes priority, then session_id lookup
+    // Resolve slot: explicit slot > session_id mapping > fallback_slot
     let slot = update.slot;
     if (slot === undefined && update.session_id !== undefined) {
       slot = this.resolveSlot(update.session_id);
     }
-    // Cannot determine slot — silently drop
-    if (slot === undefined) return;
+    if (slot === undefined && update.fallback_slot !== undefined) {
+      // Only use fallback if the slot is free or already belongs to this session
+      const existingSession = this.slotSessionMap.get(update.fallback_slot);
+      if (existingSession === undefined || existingSession === update.session_id) {
+        slot = update.fallback_slot;
+        // Register as tentative mapping so updateMapping() can move data to the real slot later
+        if (update.session_id !== undefined) {
+          this.sessionSlotMap.set(update.session_id, slot);
+          this.slotSessionMap.set(slot, update.session_id);
+        }
+      }
+    }
+    // Cannot determine slot — buffer if session_id present (daemon mapping may arrive later)
+    if (slot === undefined) {
+      if (update.session_id !== undefined) {
+        this.bufferPending(update.session_id, update);
+      }
+      return;
+    }
 
     const ts = update.ts ?? Date.now();
     const current = this.get(slot);
@@ -181,6 +208,35 @@ export class SessionStore {
     this.map.set(slot, info);
     this.persist();
     this.notify(slot, info);
+  }
+
+  /** Buffer a state update for an unresolved session_id. Only keeps the latest per session. */
+  private bufferPending(sessionId: string, update: StateUpdate): void {
+    // Evict expired entries first
+    const now = Date.now();
+    for (const [id, pending] of this.pendingUpdates) {
+      if (now - (pending.ts ?? 0) > PENDING_TTL_MS) {
+        this.pendingUpdates.delete(id);
+      }
+    }
+    // Evict oldest if at capacity
+    if (this.pendingUpdates.size >= PENDING_MAX && !this.pendingUpdates.has(sessionId)) {
+      const oldest = this.pendingUpdates.keys().next().value;
+      if (oldest !== undefined) this.pendingUpdates.delete(oldest);
+    }
+    this.pendingUpdates.set(sessionId, { ...update, ts: update.ts ?? now });
+  }
+
+  /** Replay buffered updates for sessions that now have a slot mapping. */
+  private replayPending(): void {
+    for (const [sessionId, pending] of this.pendingUpdates) {
+      const slot = this.sessionSlotMap.get(sessionId);
+      if (slot !== undefined) {
+        this.pendingUpdates.delete(sessionId);
+        // Re-enter update() — now the session_id will resolve
+        this.update(pending);
+      }
+    }
   }
 
   private notify(slot: number, info: SessionInfo): void {

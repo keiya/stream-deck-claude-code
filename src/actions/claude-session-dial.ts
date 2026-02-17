@@ -4,6 +4,7 @@ import streamDeck, {
   DialRotateEvent,
   SingletonAction,
   WillAppearEvent,
+  WillDisappearEvent,
   DidReceiveSettingsEvent,
 } from "@elgato/streamdeck";
 import type { FeedbackPayload } from "@elgato/streamdeck";
@@ -19,8 +20,6 @@ const LAYOUT_PATH = "layouts/session-info.json";
 
 // Map action context -> currently selected slot
 const dialSelectedSlot = new Map<string, number>();
-// Track whether we've set the layout for a context
-const layoutInitialized = new Set<string>();
 
 let storeRef: SessionStore | undefined;
 
@@ -171,20 +170,19 @@ export class ClaudeSessionDial extends SingletonAction<ActionSettings> {
 
     if (storeRef && ev.action.isDial()) {
       try {
-        // Explicitly set the custom layout first
-        if (!layoutInitialized.has(ev.action.id)) {
-          await ev.action.setFeedbackLayout(LAYOUT_PATH);
-          layoutInitialized.add(ev.action.id);
-          logger.info(`Slot ${slot}: layout set to ${LAYOUT_PATH}`);
-        }
+        // Always re-send layout — device may have reset after sleep/reconnect
+        await ev.action.setFeedbackLayout(LAYOUT_PATH);
         const info = storeRef.get(slot);
-        const fb = buildFeedback(slot, info);
-        await ev.action.setFeedback(fb);
+        await ev.action.setFeedback(buildFeedback(slot, info));
         logger.info(`Slot ${slot}: dial rendered (${info.state})`);
       } catch (e) {
         if (e instanceof Error) logger.error(`Slot ${slot}: dial render failed: ${e.message}`);
       }
     }
+  }
+
+  override onWillDisappear(ev: WillDisappearEvent<ActionSettings>): void {
+    dialSelectedSlot.delete(ev.action.id);
   }
 
   override async onDidReceiveSettings(ev: DidReceiveSettingsEvent<ActionSettings>): Promise<void> {

@@ -40,6 +40,7 @@ const readBody = (req: http.IncomingMessage): Promise<string | null> =>
 type ValidatedUpdate = {
   slot?: number;
   session_id?: string;
+  fallback_slot?: number;
   state: string;
   ts?: number;
   project?: string;
@@ -70,9 +71,16 @@ const validateUpdate = (
     return { ok: false, error: "session_id must be a non-empty string (max 64 chars)" };
   }
 
-  // At least one of slot or session_id is required
-  if (!hasSlot && !hasSessionId) {
-    return { ok: false, error: "either slot or session_id is required" };
+  // fallback_slot (optional — used when session_id can't be resolved)
+  const fallbackSlot = obj["fallback_slot"];
+  const hasFallbackSlot = fallbackSlot !== undefined;
+  if (hasFallbackSlot && (typeof fallbackSlot !== "number" || !Number.isInteger(fallbackSlot) || fallbackSlot < MIN_SLOT || fallbackSlot > MAX_SLOT)) {
+    return { ok: false, error: `fallback_slot must be integer ${MIN_SLOT}..${MAX_SLOT}` };
+  }
+
+  // At least one of slot, session_id, or fallback_slot is required
+  if (!hasSlot && !hasSessionId && !hasFallbackSlot) {
+    return { ok: false, error: "either slot, session_id, or fallback_slot is required" };
   }
 
   // state
@@ -110,6 +118,7 @@ const validateUpdate = (
     data: {
       ...(hasSlot && { slot: slot as number }),
       ...(hasSessionId && { session_id: sessionId as string }),
+      ...(hasFallbackSlot && { fallback_slot: fallbackSlot as number }),
       state: state as string,
       ...(ts !== undefined && { ts: ts as number }),
       ...(project !== undefined && { project: project as string }),
@@ -193,6 +202,7 @@ export const createServer = (store: SessionStore): http.Server => {
         store.update({
           slot: result.data.slot,
           session_id: result.data.session_id,
+          fallback_slot: result.data.fallback_slot,
           state: result.data.state as import("./types").SessionState,
           ts: result.data.ts,
           project: result.data.project,
@@ -228,6 +238,10 @@ export const createServer = (store: SessionStore): http.Server => {
     }
 
     jsonResponse(res, 404, { ok: false, error: "not found" });
+  });
+
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    logger.error(`Server error: ${err.code ?? err.message}`);
   });
 
   server.listen(HTTP_PORT, HTTP_HOST, () => {

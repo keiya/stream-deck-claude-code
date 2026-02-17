@@ -70,8 +70,9 @@ Content-Type: `application/json` only. Max body: 64 KB.
 
 ```jsonc
 {
-  "slot": 1,                  // int 1-8 (optional if session_id given)
-  "session_id": "UUID",       // iTerm2 session UUID (optional if slot given)
+  "slot": 1,                  // int 1-8 (optional — highest priority)
+  "session_id": "UUID",       // iTerm2 session UUID (resolved via daemon mapping)
+  "fallback_slot": 2,         // int 1-8 (used when session_id can't be resolved)
   "state": "thinking",        // required
   "ts": 1700000000000,        // optional, server sets if missing
   "project": "/path/to/repo", // optional
@@ -80,9 +81,11 @@ Content-Type: `application/json` only. Max body: 64 KB.
 }
 ```
 
-- At least one of `slot` or `session_id` required.
-- `slot` takes priority if both present.
-- Unknown `session_id` (no mapping) → silently dropped.
+- At least one of `slot`, `session_id`, or `fallback_slot` required.
+- Resolution order: `slot` (explicit) → `session_id` (daemon mapping) → `fallback_slot`.
+- Unknown `session_id` with no `fallback_slot` → buffered for up to 30s and replayed when mapping arrives.
+- `fallback_slot` is derived from `ITERM_SESSION_ID`'s tab index (`w0t<N>p0` → slot N+1). Correct unless tabs are reordered; daemon mapping overrides after arrival.
+- `fallback_slot` is skipped if the target slot is already occupied by a different session (prevents overwriting live data).
 
 ### 2.3 POST /sessions
 
@@ -116,10 +119,24 @@ iTerm2 daemon ──POST /sessions──▸ Plugin stores session_id→slot
 - Python daemon uses `session.session_id` (UUID only).
 - Fallback: `SD_SLOT` env var for manual slot assignment.
 
-### 3.3 Events monitored
+### 3.3 Singleton guard
+
+PID file at `~/.cache/claude-status/daemon.pid` ensures only one instance runs.
+On startup, sends SIGKILL to any stale previous process before writing its own PID.
+Also scans process table for stale `AutoLaunch/claude-status.py` copies (fallback for old versions that had no PID file).
+Uses SIGKILL because `iterm2.run_forever` catches SIGTERM and restarts the coroutine.
+Prevents duplicate daemons (e.g. after iTerm2 restart with orphaned processes).
+
+### 3.4 Split pane support
+
+All sessions in a tab are mapped to the same slot (not just `tab.current_session`).
+This ensures Claude Code running in any pane of a tab is correctly tracked.
+
+### 3.5 Events monitored
 
 - `LayoutChangeMonitor` — tab open, close, reorder
 - `SessionTerminationMonitor` — session end (with 100ms debounce)
+- **Heartbeat** — re-sends mapping every 30s so a late-starting plugin gets it
 
 ---
 
@@ -165,8 +182,8 @@ Custom layout (`layouts/session-info.json`) with 4 text lines on colored bg pixm
 |---|---|---|
 | 1 | line1 | State label (bold, 16px) |
 | 2 | line2 | Project directory |
-| 3 | line3 | Latest prompt |
-| 4 | line4 | Detail (tool name) |
+| 3 | line3 | Latest prompt (line 1) |
+| 4 | line4 | Latest prompt (line 2) |
 
 Layout rule: bg pixmap at `zOrder: 0`, text items at `zOrder: 1`. Items at the same zOrder must NOT have overlapping rects.
 
